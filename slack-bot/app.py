@@ -5,9 +5,8 @@ import threading
 from datetime import date
 
 import requests
-from flask import Flask, request
 from slack_bolt import App
-from slack_bolt.adapter.flask import SlackRequestHandler
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from recalc import recalculate
 from report_builder import build_workbook
@@ -15,18 +14,13 @@ from report_builder import build_workbook
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("comp-report-bot")
 
-slack_app = App(
-    token=os.environ["SLACK_BOT_TOKEN"],
-    signing_secret=os.environ["SLACK_SIGNING_SECRET"],
-)
-flask_app = Flask(__name__)
-handler = SlackRequestHandler(slack_app)
+app = App(token=os.environ["SLACK_BOT_TOKEN"])
 
 # Slack retries event delivery at least once; skip a file we've already started.
 _seen_file_ids = set()
 
 
-@slack_app.event("message")
+@app.event("message")
 def handle_message_with_file(body, event, client, ack):
     ack()
 
@@ -102,15 +96,5 @@ def _build_and_reply(client, channel, thread_ts, file_info):
                 os.remove(p)
 
 
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
-
-
-@flask_app.route("/", methods=["GET"])
-def health():
-    return "ok", 200
-
-
 if __name__ == "__main__":
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 3000)))
+    SocketModeHandler(app, os.environ["SLACK_APP_TOKEN"]).start()

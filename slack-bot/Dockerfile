@@ -12,7 +12,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-ENV PORT=3000
-EXPOSE 3000
-
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT:-3000} --timeout 120 app:flask_app"]
+CMD ["python", "app.py"]

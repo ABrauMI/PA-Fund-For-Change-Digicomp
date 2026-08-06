@@ -4,11 +4,16 @@ Drop an AdHawk CSV export into a Slack channel or DM, and the bot replies
 in-thread with a finished multi-tab competitive report workbook (one tab
 per race, styled like the GPS Impact template, plus a Summary index).
 
+Runs in **Socket Mode** — the app opens an outbound WebSocket to Slack, so
+there's no public URL, no Request URL verification, and no inbound
+networking to configure on Railway.
+
 ## How it works
 
-- Slack sends a `message` event to this app whenever a file is posted in a
-  channel/DM the bot is a member of.
-- The app downloads any `.csv` attachment, builds the workbook
+- The app maintains a persistent Socket Mode connection to Slack and
+  receives a `message` event whenever a file is posted in a channel/DM
+  it's a member of.
+- It downloads any `.csv` attachment, builds the workbook
   (`report_builder.py`), recalculates formulas with a headless LibreOffice
   so Slack's preview shows real numbers, and posts the `.xlsx` back in the
   same thread.
@@ -19,9 +24,15 @@ per race, styled like the GPS Impact template, plus a Summary index).
 1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
 2. Name it (e.g. "Comp Report Bot") and pick your workspace.
 
+### Turn on Socket Mode
+
+**Settings → Socket Mode** → toggle it on. Slack will prompt you to create
+an **App-Level Token** — name it anything, grant it the `connections:write`
+scope, and generate it. Copy the token (starts `xapp-`).
+
 ### Bot Token Scopes
 
-**OAuth & Permissions** → **Scopes** → **Bot Token Scopes**, add:
+**Features → OAuth & Permissions** → **Bot Token Scopes**, add:
 
 | Scope | Why |
 |---|---|
@@ -36,9 +47,9 @@ private channels / group DMs.
 
 ### Event Subscriptions
 
-**Event Subscriptions** → toggle on. You'll set the **Request URL** in
-step 3, after Railway gives you a domain — Slack won't let you save a URL
-it can't verify yet, so leave this tab open and come back to it.
+**Features → Event Subscriptions** → toggle on. Because Socket Mode is
+already enabled, there's no Request URL field — events are delivered over
+the socket instead.
 
 Under **Subscribe to bot events**, add:
 
@@ -52,36 +63,25 @@ Under **Subscribe to bot events**, add:
 **OAuth & Permissions** → **Install to Workspace** → Allow. Copy the
 **Bot User OAuth Token** (starts `xoxb-`).
 
-Then **Basic Information** → **App Credentials** → copy the **Signing
-Secret**.
+You now have two tokens: the `xoxb-...` bot token and the `xapp-...`
+app-level token from the Socket Mode step.
 
 ## 2. Deploy to Railway
 
 1. Push this repo to GitHub (already done if you're reading this from the repo).
 2. In Railway: **New Project** → **Deploy from GitHub repo** → pick this repo.
-3. Open the new service's **Settings**:
-   - **Root Directory**: `slack-bot` (this repo has other stuff at the top
-     level, so tell Railway to build only this folder).
-   - Railway will detect the `Dockerfile` in `slack-bot/` automatically —
-     no other build config needed.
+3. Open the new service's **Settings** → set **Root Directory** to
+   `slack-bot` (this repo has other stuff at the top level, so tell
+   Railway to build only this folder). Railway detects the `Dockerfile`
+   there automatically.
 4. **Variables** tab → add:
-   - `SLACK_BOT_TOKEN` = the `xoxb-...` token from step 1
-   - `SLACK_SIGNING_SECRET` = the signing secret from step 1
-5. Deploy. Once it's live, open **Settings** → **Networking** → **Generate
-   Domain** to get a public URL like `https://your-app.up.railway.app`.
+   - `SLACK_BOT_TOKEN` = the `xoxb-...` token
+   - `SLACK_APP_TOKEN` = the `xapp-...` token
+5. Deploy. That's it — **no public domain / networking setup needed**;
+   this service only makes outbound connections, so you can skip
+   Railway's "Generate Domain" step entirely.
 
-## 3. Finish the Slack app config
-
-Back in api.slack.com → **Event Subscriptions** → **Request URL**, enter:
-
-```
-https://your-app.up.railway.app/slack/events
-```
-
-Slack will POST a verification challenge; the app answers it automatically
-(you should see a green "Verified" ✅). Save.
-
-## 4. Try it
+## 3. Try it
 
 1. In Slack, invite the bot to a channel (`/invite @Comp Report Bot`) or
    just open a DM with it.
@@ -103,5 +103,5 @@ Slack will POST a verification challenge; the app answers it automatically
 - **Redeploying**: push to the branch Railway is tracking and it redeploys
   automatically.
 - **Logs / troubleshooting**: Railway's **Deployments** → **View Logs**
-  tab shows the Flask/Bolt logs, including the full traceback if a build
-  fails on a malformed CSV.
+  tab shows the app's logs, including the full traceback if a build fails
+  on a malformed CSV.
