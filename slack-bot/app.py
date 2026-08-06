@@ -14,7 +14,7 @@ from report_builder import build_workbook
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("comp-report-bot")
 
-app = App(token=os.environ["SLACK_BOT_TOKEN"])
+app = App(token=os.environ["SLACK_BOT_TOKEN"], request_verification_enabled=False)
 
 # Slack retries event delivery at least once; skip a file we've already started.
 _seen_file_ids = set()
