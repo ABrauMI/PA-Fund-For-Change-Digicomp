@@ -7,11 +7,20 @@ races, different week ranges, and possibly non-partisan spenders.
 
 import re
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+from openpyxl.drawing.xdr import XDRPositiveSize2D
+from openpyxl.utils.units import pixels_to_EMU
+
+LOGO_PATH = Path(__file__).parent / 'assets' / 'gps_impact_logo_white.png'
+LOGO_HEIGHT_PX = 40  # header bar is ~69px tall (34pt + 18pt); leaves margin above/below
+LOGO_RIGHT_MARGIN_PX = 16
 
 PLATFORM_ORDER = {'CTV': 0, 'Google': 1, 'Facebook': 2, 'Twitter': 3}
 
@@ -96,9 +105,14 @@ def _race_group_and_number(race):
     return race, ''
 
 
-def build_workbook(csv_path, out_path, reference_date=None):
+def build_workbook(csv_path, out_path, reference_date=None, exclude_election_names=None):
+    """exclude_election_names: optional list of Election Name values to drop before
+    building tabs — for manually filtering out a known-bad/mistagged row. Not
+    detected automatically; the caller has to have spotted it first."""
     df = pd.read_csv(csv_path)
     df = df.dropna(subset=['Election Name'])
+    if exclude_election_names:
+        df = df[~df['Election Name'].isin(exclude_election_names)]
     if df.empty:
         raise ValueError('No races found in this export (no rows with an Election Name).')
 
@@ -145,17 +159,56 @@ def build_workbook(csv_path, out_path, reference_date=None):
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
 
-    def style_header_bar(ws, title_text, ncols, title_cols=4):
-        ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=title_cols)
-        a1 = ws.cell(row=1, column=1, value=f'   {title_text}')
+    def _col_pixel_width(width_units):
+        return width_units * 7 + 5
+
+    def _add_logo(ws, col_widths):
+        if not LOGO_PATH.exists():
+            return
+        img = XLImage(str(LOGO_PATH))
+        target_h = LOGO_HEIGHT_PX
+        target_w = target_h * img.width / img.height
+
+        remaining = target_w + LOGO_RIGHT_MARGIN_PX
+        col_idx, col_off_px = 1, 0.0
+        for i in range(len(col_widths), 0, -1):
+            w_px = _col_pixel_width(col_widths[i - 1])
+            if remaining <= w_px:
+                col_idx, col_off_px = i, w_px - remaining
+                break
+            remaining -= w_px
+
+        header_height_px = (34 + 18) * 4 / 3  # points -> pixels at 96dpi
+        row_off_px = max((header_height_px - target_h) / 2, 0)
+
+        img.width = target_w
+        img.height = target_h
+        marker = AnchorMarker(
+            col=col_idx - 1, colOff=pixels_to_EMU(col_off_px),
+            row=0, rowOff=pixels_to_EMU(row_off_px),
+        )
+        img.anchor = OneCellAnchor(
+            _from=marker,
+            ext=XDRPositiveSize2D(pixels_to_EMU(target_w), pixels_to_EMU(target_h)),
+        )
+        ws.add_image(img)
+
+    def style_header_bar(ws, title_text, ncols, col_widths):
+        # Merge the title cell across the FULL header width (not just a narrow
+        # left block) — LibreOffice clips text at a merged cell's own boundary
+        # regardless of whether neighboring cells are empty, so a narrow merge
+        # truncates any title longer than that block, even though Excel itself
+        # would have let it overflow into the empty cells beyond.
+        ws.merge_cells(start_row=1, start_column=1, end_row=2, end_column=ncols)
+        a1 = ws.cell(row=1, column=1, value=title_text)
         a1.font = font(bold=True, size=14, color=WHITE, name=FONT_TITLE)
-        a1.alignment = Alignment(horizontal='right', vertical='center')
-        ws.merge_cells(start_row=1, start_column=title_cols + 1, end_row=1, end_column=ncols)
+        a1.alignment = Alignment(horizontal='left', vertical='center', indent=1)
         for r in (1, 2):
             for col in range(1, ncols + 1):
                 ws.cell(row=r, column=col).fill = fill(NAVY)
         ws.row_dimensions[1].height = 34
         ws.row_dimensions[2].height = 18
+        _add_logo(ws, col_widths)
 
     def apply_print_setup(ws, ncols):
         ws.page_setup.orientation = 'landscape'
@@ -164,18 +217,16 @@ def build_workbook(csv_path, out_path, reference_date=None):
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.print_title_rows = '1:3'
 
+    race_col_widths = [34, 8, 16, 13] + [12] * len(week_labels)
+
     def set_col_widths(ws):
-        ws.column_dimensions['A'].width = 34
-        ws.column_dimensions['B'].width = 8
-        ws.column_dimensions['C'].width = 16
-        ws.column_dimensions['D'].width = 13
-        for col in range(5, last_col + 1):
-            ws.column_dimensions[get_column_letter(col)].width = 12
+        for i, w in enumerate(race_col_widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
 
     def build_race_sheet(race, recs):
         ws = wb.create_sheet(title=race[:31])
         ncols = last_col
-        style_header_bar(ws, race, ncols)
+        style_header_bar(ws, race, ncols, race_col_widths)
 
         headers = ['CANDIDATE / COMMITTEE', 'PARTY', 'PLATFORM', 'TOTAL SPEND'] + week_headers
         for col, text in enumerate(headers, start=1):
@@ -314,7 +365,8 @@ def build_workbook(csv_path, out_path, reference_date=None):
     def build_summary_sheet(race_meta):
         ws = wb.create_sheet(title='Summary', index=0)
         ncols = 7
-        style_header_bar(ws, report_title, ncols, title_cols=2)
+        summary_col_widths = [18, 16, 10, 14, 14, 14, 32]
+        style_header_bar(ws, report_title, ncols, summary_col_widths)
 
         headers = ['RACE', 'GROUP', 'NUMBER', 'TOTAL SPEND', 'GOP TOTAL', 'DEM TOTAL', 'TOP SPENDER']
         for col, text in enumerate(headers, start=1):
@@ -324,9 +376,8 @@ def build_workbook(csv_path, out_path, reference_date=None):
             c.alignment = Alignment(horizontal='center', vertical='center')
         ws.row_dimensions[3].height = 24
 
-        widths = {'A': 18, 'B': 16, 'C': 10, 'D': 14, 'E': 14, 'F': 14, 'G': 32}
-        for col, w in widths.items():
-            ws.column_dimensions[col].width = w
+        for i, w in enumerate(summary_col_widths, start=1):
+            ws.column_dimensions[get_column_letter(i)].width = w
         ws.freeze_panes = 'A4'
         ws.sheet_view.showGridLines = False
         apply_print_setup(ws, ncols)
