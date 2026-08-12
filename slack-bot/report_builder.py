@@ -259,7 +259,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
     def build_race_sheet(race, recs):
         ws = wb.create_sheet(title=sheet_names[race])
         ncols = last_col
-        style_header_bar(ws, race, ncols, race_col_widths)
+        style_header_bar(ws, sheet_names[race], ncols, race_col_widths)
 
         headers = ['CANDIDATE / COMMITTEE', 'PARTY', 'PLATFORM', 'TOTAL SPEND'] + week_headers
         for col, text in enumerate(headers, start=1):
