@@ -14,6 +14,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.formatting.rule import ColorScaleRule
+from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
@@ -491,7 +492,13 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             label_cell = ws.cell(row=start_row, column=1, value=label)
             label_cell.font = font(bold=True, size=9)
             label_cell.alignment = Alignment(vertical='center', wrap_text=True)
-            label_cell.hyperlink = f"#'{sheet_ref}'!A1"
+            # A plain string here would make openpyxl write this as an EXTERNAL
+            # relationship (Target="#'...'!A1", TargetMode="External") — Excel
+            # then treats it as a link to an outside file/URL and tries to
+            # resolve it relative to wherever the workbook was first saved,
+            # breaking as soon as the file moves. `location=` writes a real
+            # same-workbook reference with no relationship at all.
+            label_cell.hyperlink = Hyperlink(ref='', location=f"'{sheet_ref}'!A1")
             label_cell.border = GRID
             ws.merge_cells(start_row=start_row, start_column=1, end_row=subtotal_row, end_column=1)
 
