@@ -50,6 +50,11 @@ PARTY_ORDER = ['R', 'D', 'NP']
 MEDIUM_BOTTOM = Border(bottom=Side(style='medium'))
 DOUBLE_BOTTOM = Border(bottom=Side(style='double'))
 
+GRID_SIDE = Side(style='thin', color='D9D9D9')
+GRID = Border(left=GRID_SIDE, right=GRID_SIDE, top=GRID_SIDE, bottom=GRID_SIDE)
+GRID_MEDIUM_BOTTOM = Border(left=GRID_SIDE, right=GRID_SIDE, top=GRID_SIDE, bottom=Side(style='medium'))
+GRID_DOUBLE_BOTTOM = Border(left=GRID_SIDE, right=GRID_SIDE, top=GRID_SIDE, bottom=Side(style='double'))
+
 WEEK_COL_RE = re.compile(r'^(\d{2}/\d{2})-(\d{2}/\d{2}) (DEM|GOP|total)$')
 
 
@@ -399,6 +404,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             c.font = font(bold=True, size=9, color=WHITE)
             c.fill = fill(NAVY)
             c.alignment = Alignment(horizontal='center', vertical='center')
+            c.border = GRID
         ws.row_dimensions[3].height = 24
 
         for i, w in enumerate(summary_col_widths, start=1):
@@ -445,6 +451,8 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
                 for c in (gop_cell, dem_cell, tot_cell, delta_cell):
                     c.font = font(size=9)
                     c.number_format = '$#,##0;-$#,##0;""'
+                for col in range(1, ncols + 1):
+                    ws.cell(row=row, column=col).border = GRID
                 row += 1
 
             subtotal_row = row
@@ -459,7 +467,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             delta_cell = ws.cell(row=subtotal_row, column=6, value=f'=E{subtotal_row}-D{subtotal_row}')
             for col in range(1, ncols + 1):
                 ws.cell(row=subtotal_row, column=col).fill = fill(D_TOTAL)
-                ws.cell(row=subtotal_row, column=col).border = MEDIUM_BOTTOM
+                ws.cell(row=subtotal_row, column=col).border = GRID_MEDIUM_BOTTOM
             for c in (gop_cell, dem_cell, tot_cell, delta_cell):
                 c.font = font(bold=True, size=9)
                 c.number_format = '$#,##0'
@@ -469,6 +477,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             label_cell.font = font(bold=True, size=9)
             label_cell.alignment = Alignment(vertical='center', wrap_text=True)
             label_cell.hyperlink = f"#'{sheet_ref}'!A1"
+            label_cell.border = GRID
             ws.merge_cells(start_row=start_row, start_column=1, end_row=subtotal_row, end_column=1)
 
             subtotal_rows.append(subtotal_row)
@@ -490,7 +499,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
         lab.font = font(bold=True, size=10, color=WHITE)
         for col in range(1, ncols + 1):
             ws.cell(row=total_row, column=col).fill = fill(NAVY)
-            ws.cell(row=total_row, column=col).border = DOUBLE_BOTTOM
+            ws.cell(row=total_row, column=col).border = GRID_DOUBLE_BOTTOM
         for col in (3, 4, 5):
             col_letter = get_column_letter(col)
             formula = '+'.join(f'{col_letter}{r}' for r in subtotal_rows)
@@ -508,7 +517,6 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
     race_meta = {race: build_race_sheet(race, records_by_race[race]) for race in races}
     build_summary_sheet(race_meta, 'Summary', report_title, 'D', 0)
-    build_summary_sheet(race_meta, 'Last Week', f'{report_title} — LAST WEEK', last_col_letter, 1)
 
     wb.save(out_path)
     return {'races': races, 'out_path': out_path}
