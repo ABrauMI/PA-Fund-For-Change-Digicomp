@@ -13,6 +13,7 @@ import pandas as pd
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
 from openpyxl.drawing.xdr import XDRPositiveSize2D
@@ -23,6 +24,12 @@ LOGO_HEIGHT_PX = 40  # header bar is ~69px tall (34pt + 18pt); leaves margin abo
 LOGO_RIGHT_MARGIN_PX = 16
 
 PLATFORM_ORDER = {'CTV': 0, 'Google': 1, 'Facebook': 2, 'Twitter': 3}
+SUMMARY_PLATFORMS = ['CTV', 'Google', 'Facebook']
+CHAMBER_LABELS = {'LEG': 'State House', 'STSEN': 'State Senate'}
+
+DELTA_RED = 'FFDE5E4E'
+DELTA_WHITE = 'FFFFFFFF'
+DELTA_BLUE = 'FF3D6A91'
 
 NAVY = '323b51'
 WHITE = 'FFFFFF'
@@ -98,11 +105,17 @@ def _natural_sort_key(code):
     return tuple(int(p) if p.isdigit() else p for p in parts)
 
 
-def _race_group_and_number(race):
-    m = re.match(r'^(.*?)-(\d+)$', race)
-    if m:
-        return m.group(1), m.group(2)
-    return race, ''
+def _friendly_race_label(race, show_state_prefix):
+    """'PA-LEG-13' -> 'State House District 13' (or 'PA State House District 13'
+    when multiple states are present in one file, to avoid ambiguity). Falls
+    back to the raw code for anything that doesn't match the LEG/STSEN pattern
+    — e.g. a statewide race — since we don't know how to phrase those."""
+    m = re.match(r'^([A-Za-z]{2,})-(LEG|STSEN)-0*(\d+)$', race)
+    if not m:
+        return race
+    state, chamber, number = m.groups()
+    label = f'{CHAMBER_LABELS[chamber]} District {number}'
+    return f'{state} {label}' if show_state_prefix else label
 
 
 def build_workbook(csv_path, out_path, reference_date=None, exclude_election_names=None):
@@ -145,7 +158,6 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             })
         records_by_race[race] = recs
 
-    group_tokens = {_race_group_and_number(r)[0] for r in races}
     prefix_tokens = {r.split('-')[0] for r in races}
     if len(prefix_tokens) == 1:
         title_prefix = next(iter(prefix_tokens))
@@ -280,8 +292,16 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
                     dcell.number_format = '$#,##0;-$#,##0;""'
                     row += 1
                 end_row = row - 1
+                # Column A (advertiser name) merges across the block — purely
+                # cosmetic, nothing reads it as data. Column B (party) stays
+                # UNMERGED and gets a real value on every row, including the
+                # total row below: the Summary tabs' SUMIFS formulas filter by
+                # this column, and a merged cell only has a value in its
+                # top-left anchor — every other row in the merge would read
+                # back blank to a formula, silently dropping that platform's
+                # spend from the party split (while a party-blind total still
+                # matches, so the discrepancy allowed the bug to hide well).
                 ws.merge_cells(start_row=start_row, start_column=1, end_row=row, end_column=1)
-                ws.merge_cells(start_row=start_row, start_column=2, end_row=row, end_column=2)
 
                 tot_label = ws.cell(row=row, column=3, value=f'{adv} Total')
                 tot_label.font = font(bold=True, size=9)
@@ -289,8 +309,11 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
                 tot_label.border = MEDIUM_BOTTOM
                 ws.cell(row=row, column=1).fill = fill(totalfill)
                 ws.cell(row=row, column=1).border = MEDIUM_BOTTOM
-                ws.cell(row=row, column=2).fill = fill(totalfill)
-                ws.cell(row=row, column=2).border = MEDIUM_BOTTOM
+                pcell = ws.cell(row=row, column=2, value=party)
+                pcell.font = font(bold=True, size=9)
+                pcell.fill = fill(totalfill)
+                pcell.alignment = Alignment(horizontal='center')
+                pcell.border = MEDIUM_BOTTOM
                 for i in range(len(week_labels)):
                     col = 5 + i
                     col_letter = get_column_letter(col)
@@ -362,13 +385,15 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
         return {'grand_row': grand_row, 'party_row': party_label_row}
 
-    def build_summary_sheet(race_meta):
-        ws = wb.create_sheet(title='Summary', index=0)
-        ncols = 7
-        summary_col_widths = [18, 16, 10, 14, 14, 14, 32]
-        style_header_bar(ws, report_title, ncols, summary_col_widths)
+    show_state_prefix = len({r.split('-')[0] for r in races}) > 1
+    summary_col_widths = [28, 12, 14, 14, 14, 18]
 
-        headers = ['RACE', 'GROUP', 'NUMBER', 'TOTAL SPEND', 'GOP TOTAL', 'DEM TOTAL', 'TOP SPENDER']
+    def build_summary_sheet(race_meta, sheet_name, tab_title, sum_col_letter, sheet_index):
+        ws = wb.create_sheet(title=sheet_name, index=sheet_index)
+        ncols = len(summary_col_widths)
+        style_header_bar(ws, tab_title, ncols, summary_col_widths)
+
+        headers = ['RACE', 'PLATFORM', 'TOTAL SPEND', 'GOP TOTAL', 'DEM TOTAL', 'DELTA (DEM-GOP)']
         for col, text in enumerate(headers, start=1):
             c = ws.cell(row=3, column=col, value=text)
             c.font = font(bold=True, size=9, color=WHITE)
@@ -384,64 +409,106 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
         row = 4
         first_row = row
+        subtotal_rows = []
+
         for race in races:
             meta = race_meta[race]
-            group, number = _race_group_and_number(race)
-            recs = records_by_race[race]
-            by_adv_total = {}
-            for r in recs:
-                by_adv_total[r['advertiser']] = by_adv_total.get(r['advertiser'], 0.0) + sum(r['weekly'])
-            top_spender = max(by_adv_total, key=by_adv_total.get)
-
-            c = ws.cell(row=row, column=1, value=race)
-            c.hyperlink = f"#'{race[:31]}'!A1"
-            c.font = Font(name=FONT_BODY, size=9, bold=True, color='1155CC', underline='single')
-
-            ws.cell(row=row, column=2, value=group).font = font(size=9)
-            ws.cell(row=row, column=3, value=number).font = font(size=9)
-            ws.cell(row=row, column=3).alignment = Alignment(horizontal='center')
-
             grand_row = meta['grand_row']
             r_row = meta['party_row'].get('R')
             d_row = meta['party_row'].get('D')
+            sheet_ref = race[:31]
+            label = _friendly_race_label(race, show_state_prefix)
 
-            dcell = ws.cell(row=row, column=4, value=f"='{race[:31]}'!D{grand_row}")
-            dcell.number_format = '$#,##0'
-            dcell.font = font(bold=True, size=9)
+            start_row = row
+            for platform in SUMMARY_PLATFORMS:
+                sum_range = f"'{sheet_ref}'!{sum_col_letter}$4:{sum_col_letter}${grand_row}"
+                platform_range = f"'{sheet_ref}'!$C$4:$C${grand_row}"
+                party_range = f"'{sheet_ref}'!$B$4:$B${grand_row}"
 
-            ecell = ws.cell(row=row, column=5, value=(f"='{race[:31]}'!D{r_row}" if r_row else 0))
-            ecell.number_format = '$#,##0'
-            ecell.font = font(size=9)
+                ws.cell(row=row, column=2, value=platform).font = font(size=9)
+                gop_cell = ws.cell(
+                    row=row, column=4,
+                    value=f'=SUMIFS({sum_range},{platform_range},"{platform}",{party_range},"R")',
+                )
+                dem_cell = ws.cell(
+                    row=row, column=5,
+                    value=f'=SUMIFS({sum_range},{platform_range},"{platform}",{party_range},"D")',
+                )
+                # No party filter here, so a non-partisan spender on this platform
+                # (if any) still counts toward the total even though it has no
+                # GOP/DEM column of its own.
+                tot_cell = ws.cell(
+                    row=row, column=3,
+                    value=f'=SUMIFS({sum_range},{platform_range},"{platform}")',
+                )
+                delta_cell = ws.cell(row=row, column=6, value=f'=E{row}-D{row}')
+                for c in (gop_cell, dem_cell, tot_cell, delta_cell):
+                    c.font = font(size=9)
+                    c.number_format = '$#,##0;-$#,##0;""'
+                row += 1
 
-            fcell = ws.cell(row=row, column=6, value=(f"='{race[:31]}'!D{d_row}" if d_row else 0))
-            fcell.number_format = '$#,##0'
-            fcell.font = font(size=9)
+            subtotal_row = row
+            gop_ref = f"'{sheet_ref}'!{sum_col_letter}{r_row}" if r_row else '0'
+            dem_ref = f"'{sheet_ref}'!{sum_col_letter}{d_row}" if d_row else '0'
+            tot_ref = f"'{sheet_ref}'!{sum_col_letter}{grand_row}"
 
-            ws.cell(row=row, column=7, value=top_spender).font = font(size=9)
-            row += 1
+            ws.cell(row=subtotal_row, column=2, value='SUBTOTAL')
+            gop_cell = ws.cell(row=subtotal_row, column=4, value=f'={gop_ref}')
+            dem_cell = ws.cell(row=subtotal_row, column=5, value=f'={dem_ref}')
+            tot_cell = ws.cell(row=subtotal_row, column=3, value=f'={tot_ref}')
+            delta_cell = ws.cell(row=subtotal_row, column=6, value=f'=E{subtotal_row}-D{subtotal_row}')
+            for col in range(1, ncols + 1):
+                ws.cell(row=subtotal_row, column=col).fill = fill(D_TOTAL)
+                ws.cell(row=subtotal_row, column=col).border = MEDIUM_BOTTOM
+            for c in (gop_cell, dem_cell, tot_cell, delta_cell):
+                c.font = font(bold=True, size=9)
+                c.number_format = '$#,##0'
+            ws.cell(row=subtotal_row, column=2).font = font(bold=True, size=9)
 
-        last_row = row - 1
+            label_cell = ws.cell(row=start_row, column=1, value=label)
+            label_cell.font = font(bold=True, size=9)
+            label_cell.alignment = Alignment(vertical='center', wrap_text=True)
+            label_cell.hyperlink = f"#'{sheet_ref}'!A1"
+            ws.merge_cells(start_row=start_row, start_column=1, end_row=subtotal_row, end_column=1)
+
+            subtotal_rows.append(subtotal_row)
+            row = subtotal_row + 2  # subtotal row + one blank separator
+
+        last_data_row = row - 2
+        ws.conditional_formatting.add(
+            f'F{first_row}:F{last_data_row}',
+            ColorScaleRule(
+                start_type='min', start_color=DELTA_RED,
+                mid_type='num', mid_value=0, mid_color=DELTA_WHITE,
+                end_type='max', end_color=DELTA_BLUE,
+            ),
+        )
+
         total_row = row
-        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=3)
+        ws.merge_cells(start_row=total_row, start_column=1, end_row=total_row, end_column=2)
         lab = ws.cell(row=total_row, column=1, value='TOTAL — ALL RACES')
         lab.font = font(bold=True, size=10, color=WHITE)
-        for col in range(1, 8):
+        for col in range(1, ncols + 1):
             ws.cell(row=total_row, column=col).fill = fill(NAVY)
             ws.cell(row=total_row, column=col).border = DOUBLE_BOTTOM
-        for col in (4, 5, 6):
+        for col in (3, 4, 5):
             col_letter = get_column_letter(col)
-            cell = ws.cell(row=total_row, column=col, value=f'=SUM({col_letter}{first_row}:{col_letter}{last_row})')
+            formula = '+'.join(f'{col_letter}{r}' for r in subtotal_rows)
+            cell = ws.cell(row=total_row, column=col, value=f'={formula}')
             cell.font = font(bold=True, size=10, color=WHITE)
             cell.number_format = '$#,##0'
-        ws.cell(row=total_row, column=7).font = font(bold=True, size=10, color=WHITE)
+        delta_total = ws.cell(row=total_row, column=6, value=f'=E{total_row}-D{total_row}')
+        delta_total.font = font(bold=True, size=10, color=WHITE)
+        delta_total.number_format = '$#,##0'
 
         footer_row = total_row + 2
-        ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=7)
+        ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=ncols)
         f = ws.cell(row=footer_row, column=1, value='Report prepared by GPS Impact  |  Confidential')
         f.font = font(bold=False, size=8, color=FOOTER_GREY)
 
     race_meta = {race: build_race_sheet(race, records_by_race[race]) for race in races}
-    build_summary_sheet(race_meta)
+    build_summary_sheet(race_meta, 'Summary', report_title, 'D', 0)
+    build_summary_sheet(race_meta, 'Last Week', f'{report_title} — LAST WEEK', last_col_letter, 1)
 
     wb.save(out_path)
     return {'races': races, 'out_path': out_path}
