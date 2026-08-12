@@ -26,6 +26,7 @@ LOGO_RIGHT_MARGIN_PX = 16
 PLATFORM_ORDER = {'CTV': 0, 'Google': 1, 'Facebook': 2, 'Twitter': 3}
 SUMMARY_PLATFORMS = ['CTV', 'Google', 'Facebook']
 CHAMBER_LABELS = {'LEG': 'State House', 'STSEN': 'State Senate'}
+CHAMBER_ABBR = {'LEG': 'HD', 'STSEN': 'SD'}
 
 DELTA_RED = 'FFDE5E4E'
 DELTA_WHITE = 'FFFFFFFF'
@@ -123,6 +124,18 @@ def _friendly_race_label(race, show_state_prefix):
     return f'{state} {label}' if show_state_prefix else label
 
 
+def _tab_name(race, show_state_prefix):
+    """'PA-LEG-13' -> 'HD-13' (or 'PA-HD-13' when multiple states are present).
+    Falls back to the raw code, truncated to Excel's 31-char sheet-name limit,
+    for anything that doesn't match the LEG/STSEN pattern."""
+    m = re.match(r'^([A-Za-z]{2,})-(LEG|STSEN)-0*(\d+)$', race)
+    if not m:
+        return race[:31]
+    state, chamber, number = m.groups()
+    name = f'{CHAMBER_ABBR[chamber]}-{number}'
+    return (f'{state}-{name}' if show_state_prefix else name)[:31]
+
+
 def build_workbook(csv_path, out_path, reference_date=None, exclude_election_names=None):
     """exclude_election_names: optional list of Election Name values to drop before
     building tabs — for manually filtering out a known-bad/mistagged row. Not
@@ -169,6 +182,9 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
         report_title = f'{title_prefix} DIGITAL COMPETITIVE REPORT'
     else:
         report_title = 'DIGITAL COMPETITIVE REPORT'
+
+    show_state_prefix = len(prefix_tokens) > 1
+    sheet_names = {race: _tab_name(race, show_state_prefix) for race in races}
 
     last_col = 4 + len(week_labels)
     last_col_letter = get_column_letter(last_col)
@@ -241,7 +257,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             ws.column_dimensions[get_column_letter(i)].width = w
 
     def build_race_sheet(race, recs):
-        ws = wb.create_sheet(title=race[:31])
+        ws = wb.create_sheet(title=sheet_names[race])
         ncols = last_col
         style_header_bar(ws, race, ncols, race_col_widths)
 
@@ -390,7 +406,6 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
         return {'grand_row': grand_row, 'party_row': party_label_row}
 
-    show_state_prefix = len({r.split('-')[0] for r in races}) > 1
     summary_col_widths = [28, 12, 14, 14, 14, 18]
 
     def build_summary_sheet(race_meta, sheet_name, tab_title, sum_col_letter, sheet_index):
@@ -422,7 +437,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             grand_row = meta['grand_row']
             r_row = meta['party_row'].get('R')
             d_row = meta['party_row'].get('D')
-            sheet_ref = race[:31]
+            sheet_ref = sheet_names[race]
             label = _friendly_race_label(race, show_state_prefix)
 
             start_row = row
