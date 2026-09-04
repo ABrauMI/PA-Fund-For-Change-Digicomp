@@ -77,6 +77,10 @@ app-level token from the Socket Mode step.
 4. **Variables** tab → add:
    - `SLACK_BOT_TOKEN` = the `xoxb-...` token
    - `SLACK_APP_TOKEN` = the `xapp-...` token
+   - `EXCLUDE_PLATFORMS` (optional) = comma-separated Spend Platform values
+     to leave out of every report, e.g. `CTV` (or `CTV,Google` for more
+     than one). Leave unset to include everything. The report's footer
+     notes which platforms were excluded, so it's never silent about it.
 5. Deploy. That's it — **no public domain / networking setup needed**;
    this service only makes outbound connections, so you can skip
    Railway's "Generate Domain" step entirely.

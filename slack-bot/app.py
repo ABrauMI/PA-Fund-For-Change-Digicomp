@@ -16,6 +16,11 @@ logger = logging.getLogger("comp-report-bot")
 
 app = App(token=os.environ["SLACK_BOT_TOKEN"], request_verification_enabled=False)
 
+# Comma-separated Spend Platform values to leave out of every report this bot
+# builds, e.g. "CTV" or "CTV,Google". Set in Railway's Variables tab — no
+# redeploy needed beyond restarting the service after changing it.
+EXCLUDE_PLATFORMS = [p.strip() for p in os.environ.get("EXCLUDE_PLATFORMS", "").split(",") if p.strip()]
+
 # Slack retries event delivery at least once; skip a file we've already started.
 _seen_file_ids = set()
 
@@ -68,7 +73,11 @@ def _build_and_reply(client, channel, thread_ts, file_info):
             in_path = in_f.name
         out_path = in_path[:-4] + ".xlsx"
 
-        result = build_workbook(in_path, out_path, reference_date=date.today())
+        result = build_workbook(
+            in_path, out_path,
+            reference_date=date.today(),
+            exclude_platforms=EXCLUDE_PLATFORMS or None,
+        )
 
         try:
             recalculate(out_path)

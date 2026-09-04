@@ -137,14 +137,21 @@ def _tab_name(race, show_state_prefix):
     return (f'{state}-{name}' if show_state_prefix else name)[:31]
 
 
-def build_workbook(csv_path, out_path, reference_date=None, exclude_election_names=None):
+def build_workbook(csv_path, out_path, reference_date=None, exclude_election_names=None,
+                    exclude_platforms=None):
     """exclude_election_names: optional list of Election Name values to drop before
     building tabs — for manually filtering out a known-bad/mistagged row. Not
-    detected automatically; the caller has to have spotted it first."""
+    detected automatically; the caller has to have spotted it first.
+
+    exclude_platforms: optional list of Spend Platform values (e.g. ['CTV']) to
+    leave out of the report entirely — those rows are dropped before anything
+    is totaled, so they're excluded from every total, not just hidden."""
     df = pd.read_csv(csv_path)
     df = df.dropna(subset=['Election Name'])
     if exclude_election_names:
         df = df[~df['Election Name'].isin(exclude_election_names)]
+    if exclude_platforms:
+        df = df[~df['Spend Platform'].isin(exclude_platforms)]
     if df.empty:
         raise ValueError('No races found in this export (no rows with an Election Name).')
 
@@ -155,6 +162,11 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
     week_headers = [f'{lbl.split("-")[0]}/{yr}' for lbl, yr in zip(week_labels, years)]
 
     races = sorted(df['Election Name'].unique(), key=_natural_sort_key)
+    active_summary_platforms = [p for p in SUMMARY_PLATFORMS if p not in (exclude_platforms or [])]
+
+    footer_text = 'Report prepared by GPS Impact  |  Confidential'
+    if exclude_platforms:
+        footer_text += f'  |  Excludes {", ".join(exclude_platforms)} spend'
 
     records_by_race = {}
     for race in races:
@@ -388,7 +400,10 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
         for i in range(len(week_labels)):
             col = 5 + i
             col_letter = get_column_letter(col)
-            formula = '+'.join(f'{col_letter}{r}' for r in party_rows)
+            # party_rows can be empty if every row for this race got filtered
+            # out (e.g. a CTV-only race with CTV excluded) — fall back to a
+            # literal 0 rather than writing a formula with nothing to sum.
+            formula = '+'.join(f'{col_letter}{r}' for r in party_rows) or '0'
             cell = ws.cell(row=grand_row, column=col, value=f'={formula}')
             cell.font = font(bold=True, size=10, color=WHITE)
             cell.fill = fill(NAVY)
@@ -402,7 +417,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
         footer_row = grand_row + 2
         ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=last_col)
-        f = ws.cell(row=footer_row, column=1, value='Report prepared by GPS Impact  |  Confidential')
+        f = ws.cell(row=footer_row, column=1, value=footer_text)
         f.font = font(bold=False, size=8, color=FOOTER_GREY)
 
         return {'grand_row': grand_row, 'party_row': party_label_row}
@@ -442,7 +457,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
             label = _friendly_race_label(race, show_state_prefix)
 
             start_row = row
-            for platform in SUMMARY_PLATFORMS:
+            for platform in active_summary_platforms:
                 sum_range = f"'{sheet_ref}'!{sum_col_letter}$4:{sum_col_letter}${grand_row}"
                 platform_range = f"'{sheet_ref}'!$C$4:$C${grand_row}"
                 party_range = f"'{sheet_ref}'!$B$4:$B${grand_row}"
@@ -534,7 +549,7 @@ def build_workbook(csv_path, out_path, reference_date=None, exclude_election_nam
 
         footer_row = total_row + 2
         ws.merge_cells(start_row=footer_row, start_column=1, end_row=footer_row, end_column=ncols)
-        f = ws.cell(row=footer_row, column=1, value='Report prepared by GPS Impact  |  Confidential')
+        f = ws.cell(row=footer_row, column=1, value=footer_text)
         f.font = font(bold=False, size=8, color=FOOTER_GREY)
 
     race_meta = {race: build_race_sheet(race, records_by_race[race]) for race in races}
